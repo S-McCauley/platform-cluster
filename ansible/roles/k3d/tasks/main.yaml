@@ -1,0 +1,150 @@
+- name: Check if kubectl is already installed
+  ansible.builtin.command: which kubectl
+  register: kubectl_installed
+  failed_when: false
+  changed_when: false
+
+- name: Install kubectl if not present
+  ansible.builtin.shell: |
+    curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    chmod +x kubectl
+    sudo mv kubectl /usr/local/bin/
+  when: kubectl_installed.rc != 0
+  become: yes
+
+- name: Ensure k3d is installed
+  ansible.builtin.command: which k3d
+  register: k3d_installed
+  failed_when: k3d_installed.rc != 0
+  changed_when: false
+  ignore_errors: yes
+
+- name: Install k3d if not present
+  ansible.builtin.shell: |
+    curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+  when: k3d_installed.rc != 0
+  become: yes
+
+- name: Create k3d cluster
+  ansible.builtin.command: >
+    k3d cluster create test-cluster
+    --servers 1
+    --agents 2
+    --port "8081:80@loadbalancer"
+    --port "8443:443@loadbalancer"
+    --k3s-arg "--disable=traefik@server:0"
+  register: create_output
+  changed_when: "'Created cluster' in create_output.stdout"
+
+- name: Ensure Helm is installed
+  ansible.builtin.command: which helm
+  register: helm_installed
+  failed_when: helm_installed.rc != 0
+  changed_when: false
+  ignore_errors: yes
+
+- name: Install Helm if not present
+  ansible.builtin.shell: |
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  when: helm_installed.rc != 0
+  become: yes
+
+- name: Set KUBECONFIG variable for kubectl
+  ansible.builtin.set_fact:
+    kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+  
+- name: Check kubeconfig
+  ansible.builtin.stat:
+    path: "{{ kubeconfig }}"
+  register: kubeconfig_stat
+
+- name: Copy kubeconfig to local machine (if necessary)
+  ansible.builtin.copy:
+    src: "{{ kubeconfig }}"
+    dest: "~/.kube/config"
+    mode: 0600
+  when: kubeconfig_stat.stat.exists == False
+
+- name: Verify cluster is up
+  ansible.builtin.command: kubectl get nodes
+  register: kubectl_output
+  failed_when: kubectl_output.rc != 0
+  changed_when: false
+
+- name: Add ingress-nginx Helm repo
+  community.kubernetes.helm_repository:
+    name: ingress-nginx
+    repo_url: https://kubernetes.github.io/ingress-nginx
+
+- name: Install ingress-nginx via Helm
+  community.kubernetes.helm:
+    name: ingress-nginx
+    chart_ref: ingress-nginx/ingress-nginx
+    release_namespace: ingress-nginx
+    create_namespace: true
+    values:
+      controller:
+        ingressClassResource:
+          name: nginx
+          enabled: true
+          default: true
+        service:
+          type: LoadBalancer
+        minReadySeconds: 0
+        progressDeadlineSeconds: 60
+
+- name: Wait for ingress-nginx controller webhook to be ready
+  ansible.builtin.shell: |
+    kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx
+  register: rollout_status
+  retries: 10
+  delay: 10
+  until: rollout_status.rc == 0
+
+- name: Add prometheus-community Helm repo
+  community.kubernetes.helm_repository:
+    name: prometheus-community
+    repo_url: https://prometheus-community.github.io/helm-charts
+
+- name: Install Prometheus
+  community.kubernetes.helm:
+    name: prometheus
+    chart_ref: prometheus-community/prometheus
+    release_namespace: monitoring
+    create_namespace: true
+    values:
+      server:
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          annotations:
+            kubernetes.io/ingress.class: nginx
+          hosts:
+            - prometheus.local
+          paths:
+            - /prometheus
+          pathType: Prefix
+
+- name: Add Grafana Helm Repo 
+  community.kubernetes.helm_repository:
+    name: grafana
+    repo_url: https://grafana.github.io/helm-charts
+
+- name: Install Grafana
+  community.kubernetes.helm:
+    name: grafana
+    chart_ref: grafana/grafana
+    release_namespace: monitoring
+    create_namespace: true
+    values:
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        annotations:
+          kubernetes.io/ingress.class: nginx
+        hosts:
+          - grafana.local
+        paths:
+          - /grafana
+        pathType: Prefix
+      adminPassword: "admin"  # You may want to use Vault or Ansible Vault for this
