@@ -27,7 +27,7 @@
 
 - name: Create k3d cluster
   ansible.builtin.command: >
-    k3d cluster create test-cluster
+    k3d cluster create platform-cluster
     --servers 1
     --agents 2
     --port "8081:80@loadbalancer"
