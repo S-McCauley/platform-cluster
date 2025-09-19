@@ -172,7 +172,4 @@
             - argocd.local
           paths:
             - /
-          pathType: Prefix
-      configs:
-        secret:
-          argocdServerAdminPassword: "admin" 
+          pathType: Prefix 
