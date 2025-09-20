@@ -2,8 +2,9 @@
 - ~~Prometheus~~
 - ~~Grafana~~
 - ~~aRgoCD~~
-- Persistent Storage
+- GitOps Optimization
 - OAuth
+- CertManager
 - Vault
 - Jenkins
 - Github Actions
