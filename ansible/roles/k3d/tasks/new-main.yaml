@@ -1,0 +1,131 @@
+- name: GitOps-first Kubernetes cluster setup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig: "{{ lookup('env','HOME') }}/.kube/config"
+    cluster_name: platform-cluster
+    git_repo_url: "https://github.com/your-org/platform-cluster.git"
+    git_repo_branch: "main"
+    argocd_namespace: argocd
+
+  tasks:
+    - block:
+        - name: Check if kubectl is installed
+          ansible.builtin.command: which kubectl
+          register: kubectl_installed
+          failed_when: false
+          changed_when: false
+
+        - name: Install kubectl if missing
+          ansible.builtin.shell: |
+            curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+          when: kubectl_installed.rc != 0
+          become: yes
+
+        - name: Check if k3d is installed
+          ansible.builtin.command: which k3d
+          register: k3d_installed
+          failed_when: false
+          changed_when: false
+
+        - name: Install k3d if missing
+          ansible.builtin.shell: |
+            curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          when: k3d_installed.rc != 0
+          become: yes
+
+        - name: Create k3d cluster
+          ansible.builtin.command: >
+            k3d cluster create {{ cluster_name }}
+            --servers 1
+            --agents 2
+            --port "6081:80@loadbalancer"
+            --port "6443:443@loadbalancer"
+            --k3s-arg "--disable=traefik@server:0"
+          register: create_output
+          changed_when: "'Created cluster' in create_output.stdout"
+
+        - name: Ensure KUBECONFIG exists
+          ansible.builtin.file:
+            path: "{{ kubeconfig }}"
+            state: touch
+            mode: 0600
+
+        - name: Verify cluster is ready
+          ansible.builtin.command: kubectl get nodes
+          register: kubectl_output
+          failed_when: kubectl_output.rc != 0
+          changed_when: false
+
+        - name: Check if Helm is installed
+          ansible.builtin.command: which helm
+          register: helm_installed
+          failed_when: false
+          changed_when: false
+
+        - name: Install Helm if missing
+          ansible.builtin.shell: |
+            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          when: helm_installed.rc != 0
+          become: yes
+
+        - name: Add ArgoCD Helm repo
+          community.kubernetes.helm_repository:
+            name: argo
+            repo_url: https://argoproj.github.io/argo-helm
+
+        - name: Install ArgoCD
+          community.kubernetes.helm:
+            name: argocd
+            chart_ref: argo/argo-cd
+            release_namespace: "{{ argocd_namespace }}"
+            create_namespace: true
+            values:
+              server:
+                ingress:
+                  enabled: true
+                  ingressClassName: nginx
+                  annotations:
+                    kubernetes.io/ingress.class: nginx
+                  hosts:
+                    - argocd.local
+                  paths:
+                    - /
+                  pathType: Prefix
+              insecure: true
+
+        - name: Wait for ArgoCD server to be ready
+          ansible.builtin.shell: |
+            kubectl rollout status deployment argocd-server -n {{ argocd_namespace }} --timeout=120s
+          retries: 10
+          delay: 15
+          register: rollout_status
+          until: rollout_status.rc == 0
+
+        - name: Create bootstrap ArgoCD Application pointing to Git repo
+          ansible.builtin.copy:
+            dest: /tmp/bootstrap-argocd-app.yaml
+            content: |
+              apiVersion: argoproj.io/v1alpha1
+              kind: Application
+              metadata:
+                name: platform-base
+                namespace: {{ argocd_namespace }}
+              spec:
+                project: default
+                source:
+                  repoURL: {{ git_repo_url }}
+                  targetRevision: {{ git_repo_branch }}
+                  path: kubernetes/base
+                destination:
+                  server: https://kubernetes.default.svc
+                  namespace: default
+                syncPolicy:
+                  automated:
+                    prune: true
+                    selfHeal: true
+
+        - name: Apply bootstrap ArgoCD Application
+          ansible.builtin.command: kubectl apply -f /tmp/bootstrap-argocd-app.yaml
