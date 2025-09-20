@@ -27,8 +27,9 @@
         - name: Check if k3d is installed
           ansible.builtin.command: which k3d
           register: k3d_installed
-          failed_when: false
+          failed_when: k3d_installed.rc != 0
           changed_when: false
+          ignore_errors: false
 
         - name: Install k3d if missing
           ansible.builtin.shell: |
