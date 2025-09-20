@@ -1,7 +1,9 @@
-# Services to Add
+# Services/Features to Add
 - ~~Prometheus~~
 - ~~Grafana~~
-- ArgoCD
+- ~~aRgoCD~~
+- Persistent Storage
+- OAuth
 - Vault
 - Jenkins
 - Github Actions
