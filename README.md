@@ -2,11 +2,9 @@
 - ~~Prometheus~~
 - ~~Grafana~~
 - ~~aRgoCD~~
+- ~~JuiceBar~~
 - GitOps Optimization
 - OAuth
 - CertManager
-- Vault
-- Jenkins
 - Github Actions
-- Kyverno
 - Trivy
