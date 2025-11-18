@@ -30,8 +30,8 @@
     k3d cluster create platform-cluster
     --servers 1
     --agents 2
-    --port "6081:80@loadbalancer"
-    --port "6443:443@loadbalancer"
+    --port "80:80@loadbalancer"
+    --port "443:443@loadbalancer"
     --k3s-arg "--disable=traefik@server:0"
   register: create_output
   changed_when: "'Created cluster' in create_output.stdout"
@@ -182,8 +182,6 @@
     kind: Namespace
     name: juice-shop
     state: present
-t
-
 
 - name: Deploy Juice Shop app
   community.kubernetes.k8s:
